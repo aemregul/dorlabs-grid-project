@@ -20,6 +20,12 @@ import {
   Clock,
 } from "lucide-react";
 
+// ============================================
+// NANOBANANA API CONFIGURATION
+// ============================================
+const NANOBANANA_API_URL = "https://api.nanobananaapi.ai/api/v1/nanobanana";
+const NANOBANANA_API_KEY = process.env.NEXT_PUBLIC_NANOBANANA_API_KEY || "";
+
 type ModeTop = "angles" | "thumbnail" | "storyboard";
 type Aspect = "16:9" | "9:16" | "1:1";
 
@@ -101,31 +107,221 @@ export default function Home() {
   };
 
   // ============================================
+  // NANOBANANA API HELPERS
+  // ============================================
+  
+  // Base64 görseli ImgBB'ye upload et
+  const uploadToImgBB = async (base64Image: string): Promise<string> => {
+    console.log("Uploading image to ImgBB...");
+    
+    const response = await fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image: base64Image }),
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error("Upload failed:", errorData);
+      throw new Error('Upload failed');
+    }
+    
+    const data = await response.json();
+    console.log("Image uploaded successfully:", data.url);
+    return data.url;
+  };
+  
+  const generateWithNanobanana = async (imageDataUrl: string, promptText: string): Promise<string> => {
+    console.log("=== NANOBANANA API CALL ===");
+    console.log("API Key exists:", !!NANOBANANA_API_KEY);
+    
+    let finalImageUrl = imageDataUrl;
+    const isBase64 = imageDataUrl.startsWith('data:');
+    
+    // Base64 ise önce ImgBB'ye upload et
+    if (isBase64) {
+      try {
+        setLoadingProgress(5);
+        finalImageUrl = await uploadToImgBB(imageDataUrl);
+        setLoadingProgress(15);
+      } catch (uploadError) {
+        console.error("Upload failed, using Text-to-Image mode");
+        // Upload başarısız - Text-to-Image'a düş
+        const requestBody = {
+          prompt: promptText,
+          numImages: 1,
+          imageSize: aspect,
+          type: "TEXTTOIAMGE",
+        };
+        
+        const generateResponse = await fetch(`${NANOBANANA_API_URL}/generate`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${NANOBANANA_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
+        });
+        
+        const generateData = await generateResponse.json();
+        if (!generateResponse.ok || generateData.code !== 200) {
+          throw new Error(generateData.msg || "API Error");
+        }
+        
+        const taskId = generateData.data?.taskId;
+        if (!taskId) throw new Error("No taskId returned");
+        
+        return await pollTaskStatus(taskId);
+      }
+    }
+    
+    // Image-to-Image isteği gönder
+    const requestBody = {
+      prompt: promptText,
+      numImages: 1,
+      imageSize: aspect,
+      type: "IMAGETOIAMGE",
+      imageUrls: [finalImageUrl],
+    };
+    
+    console.log("Using IMAGE-TO-IMAGE mode");
+    console.log("Request body:", { ...requestBody, imageUrls: ["[URL]"] });
+
+    const generateResponse = await fetch(`${NANOBANANA_API_URL}/generate`, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${NANOBANANA_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(requestBody),
+    });
+
+    console.log("Response status:", generateResponse.status);
+    
+    const generateData = await generateResponse.json();
+    console.log("Response data:", generateData);
+
+    if (!generateResponse.ok || generateData.code !== 200) {
+      throw new Error(generateData.msg || `API Error: ${generateResponse.status}`);
+    }
+
+    const taskId = generateData.data?.taskId;
+
+    if (!taskId) {
+      throw new Error("No taskId returned from API");
+    }
+
+    console.log("Task ID:", taskId);
+
+    // 2. Task durumunu poll et
+    const resultUrl = await pollTaskStatus(taskId);
+    return resultUrl;
+  };
+
+  const pollTaskStatus = async (taskId: string): Promise<string> => {
+    const maxAttempts = 60; // 60 x 2 saniye = 2 dakika max
+    let attempts = 0;
+
+    while (attempts < maxAttempts) {
+      const response = await fetch(`${NANOBANANA_API_URL}/record-info?taskId=${taskId}`, {
+        method: "GET",
+        headers: {
+          "Authorization": `Bearer ${NANOBANANA_API_KEY}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to check task status");
+      }
+
+      const data = await response.json();
+      const status = data.data?.successFlag;
+
+      // Status: 0 = GENERATING, 1 = SUCCESS, 2 = CREATE_TASK_FAILED, 3 = GENERATE_FAILED
+      if (status === 1) {
+        // Success!
+        const resultUrl = data.data?.response?.resultImageUrl;
+        if (resultUrl) {
+          return resultUrl;
+        }
+        throw new Error("No result image URL");
+      } else if (status === 2 || status === 3) {
+        // Failed
+        throw new Error(data.data?.errorMessage || "Generation failed");
+      }
+
+      // Still generating, wait and retry
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      attempts++;
+      
+      // Progress güncelle
+      setLoadingProgress(Math.min((attempts / maxAttempts) * 100, 95));
+    }
+
+    throw new Error("Generation timed out");
+  };
+
+  // ============================================
   // PROMPT BUILDER
   // ============================================
-  const buildPrompt = () => {
-    let basePrompt = "";
+  
+  // URL'yi base64'e çevir (client-side canvas ile)
+  const convertUrlToBase64 = async (url: string): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new window.Image();
+      img.crossOrigin = "anonymous";
+      
+      img.onload = () => {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = img.width;
+          canvas.height = img.height;
+          const ctx = canvas.getContext("2d");
+          
+          if (ctx) {
+            ctx.drawImage(img, 0, 0);
+            const base64 = canvas.toDataURL("image/png");
+            console.log("Image converted to base64 successfully");
+            resolve(base64);
+          } else {
+            console.error("Canvas context error");
+            resolve(url);
+          }
+        } catch (error) {
+          console.error("Canvas conversion error:", error);
+          resolve(url);
+        }
+      };
+      
+      img.onerror = () => {
+        console.error("Image load error, using original URL");
+        resolve(url);
+      };
+      
+      // Timeout - 10 saniye içinde yüklenmezse URL'yi kullan
+      setTimeout(() => {
+        console.log("Image load timeout, using original URL");
+        resolve(url);
+      }, 10000);
+      
+      img.src = url;
+    });
+  };
 
+  const buildPrompt = () => {
     switch (topMode) {
       case "angles":
-        basePrompt =
-          "Create a 3x3 grid showing this scene from 9 different camera angles: wide shot, close-up, low angle, high angle, side view, front view, detail shot, establishing shot, and dramatic perspective.";
-        break;
+        return "Create a 3x3 grid showing 9 different cinematic camera angles of this exact scene: wide shot, medium shot, close-up, low angle, high angle, side view, over-the-shoulder, detail shot, and dramatic perspective.";
+      
       case "thumbnail":
-        basePrompt =
-          "Create a 3x3 grid of 9 eye-catching thumbnail variations of this image, each with different framing and emphasis.";
-        break;
+        return "Create a 3x3 grid of 9 eye-catching thumbnail variations with different compositions, framing, and visual emphasis.";
+      
       case "storyboard":
-        basePrompt =
-          "Create a 3x3 grid showing a 9-panel storyboard progression of this scene.";
-        break;
+        return "Create a 3x3 grid showing a 9-panel cinematic storyboard progression of this scene.";
+      
+      default:
+        return "";
     }
-
-    if (mode === "self" && prompt) {
-      basePrompt += ` Style guidance: ${prompt}`;
-    }
-
-    return basePrompt;
   };
 
   // ============================================
@@ -138,32 +334,53 @@ export default function Home() {
     setLoadingProgress(0);
     setError(null);
     setSelected([]);
+    setExtractedImages([]);
+
+    setLoading(true);
+    setLoadingProgress(0);
+    setError(null);
+    setSelected([]);
+    setExtractedImages([]);
 
     try {
-      // TODO: Nanobanana API entegrasyonu
-      // const response = await fetch('NANOBANANA_API_URL/generate', {
-      //   method: 'POST',
-      //   headers: {
-      //     'Authorization': `Bearer ${process.env.NEXT_PUBLIC_NANOBANANA_API_KEY}`,
-      //     'Content-Type': 'application/json',
-      //   },
-      //   body: JSON.stringify({
-      //     image: image,
-      //     prompt: buildPrompt(),
-      //     aspect_ratio: aspect,
-      //   }),
-      // });
-
-      // DEMO MODE - Simüle edilmiş progress
-      for (let i = 0; i <= 100; i += Math.random() * 15 + 5) {
-        setLoadingProgress(Math.min(i, 99));
-        await new Promise((resolve) => setTimeout(resolve, 200));
-      }
-      setLoadingProgress(100);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      // Grid generation prompt
+      let gridPrompt = buildPrompt();
       
-      setGridImage(image);
-      setGridGenerated(true);
+      // Custom mode ise kullanıcı prompt'unu ekle
+      if (mode === "self" && prompt) {
+        gridPrompt += ` Additional style: ${prompt}`;
+      }
+
+      console.log("=== GENERATE GRID ===");
+      console.log("Prompt:", gridPrompt);
+      console.log("Has API Key:", !!NANOBANANA_API_KEY && NANOBANANA_API_KEY.length > 0);
+
+      if (NANOBANANA_API_KEY && NANOBANANA_API_KEY.length > 0) {
+        // Gerçek API çağrısı
+        console.log("Using REAL API");
+        setLoadingProgress(5);
+        
+        const resultImageUrl = await generateWithNanobanana(image, gridPrompt);
+        setLoadingProgress(100);
+        
+        // Kısa bekleme
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+        setGridImage(resultImageUrl);
+        setGridGenerated(true);
+      } else {
+        // DEMO MODE - API key yoksa simülasyon
+        console.log("Using DEMO MODE - No API key found");
+        for (let i = 0; i <= 100; i += Math.random() * 15 + 5) {
+          setLoadingProgress(Math.min(i, 99));
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+        setLoadingProgress(100);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        
+        setGridImage(image);
+        setGridGenerated(true);
+      }
     } catch (err) {
       console.error("Grid generation error:", err);
       setError(err instanceof Error ? err.message : "An error occurred");
@@ -176,15 +393,34 @@ export default function Home() {
   // ============================================
   // CROP GRID CELL
   // ============================================
-  const cropGridCell = (cellIndex: number): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      if (!gridImage) {
-        reject(new Error("No grid image"));
-        return;
-      }
+  const cropGridCell = async (cellIndex: number): Promise<string> => {
+    if (!gridImage) {
+      throw new Error("No grid image");
+    }
 
+    // Eğer gridImage zaten base64 ise direkt kullan
+    let imageToUse = gridImage;
+    
+    // Eğer URL ise, önce server-side proxy ile base64'e çevir
+    if (!gridImage.startsWith('data:')) {
+      try {
+        const response = await fetch(`/api/download?url=${encodeURIComponent(gridImage)}`);
+        if (response.ok) {
+          const blob = await response.blob();
+          imageToUse = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+          });
+        }
+      } catch (error) {
+        console.error("Failed to fetch image via proxy:", error);
+        throw new Error("Image load failed");
+      }
+    }
+
+    return new Promise((resolve, reject) => {
       const img = new window.Image();
-      img.crossOrigin = "anonymous";
 
       img.onload = () => {
         const canvas = document.createElement("canvas");
@@ -213,7 +449,7 @@ export default function Home() {
       };
 
       img.onerror = () => reject(new Error("Image load failed"));
-      img.src = gridImage;
+      img.src = imageToUse;
     });
   };
 
@@ -240,27 +476,28 @@ export default function Home() {
         const cellIndex = selected[i];
         const croppedImage = await cropGridCell(cellIndex);
 
-        // TODO: Nanobanana API ile upscale
-        // const response = await fetch('NANOBANANA_API_URL/upscale', {
-        //   method: 'POST',
-        //   headers: {
-        //     'Authorization': `Bearer ${process.env.NEXT_PUBLIC_NANOBANANA_API_KEY}`,
-        //     'Content-Type': 'application/json',
-        //   },
-        //   body: JSON.stringify({
-        //     image: croppedImage,
-        //     scale: scale,
-        //   }),
-        // });
+        let finalImageUrl = croppedImage;
 
-        // DEMO MODE - API bağlanınca kaldırılacak
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        // Upscale with Nanobanana API if key exists and scale > 1
+        if (NANOBANANA_API_KEY && scale > 1) {
+          try {
+            const upscalePrompt = `Upscale this image to ${scale}x resolution. Enhance details, maintain sharpness, and preserve the original style and colors. High quality ${scale === 4 ? '4K' : 'HD'} output.`;
+            finalImageUrl = await generateWithNanobanana(croppedImage, upscalePrompt);
+          } catch (upscaleError) {
+            console.error("Upscale failed, using original:", upscaleError);
+            // Upscale başarısız olursa orijinal cropped image'ı kullan
+            finalImageUrl = croppedImage;
+          }
+        } else {
+          // Demo mode veya 1x scale - sadece crop
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
 
         // Update the specific image status to ready
         setExtractedImages(prev => {
           const newImages = prev.map(img => 
             img.index === cellIndex 
-              ? { index: img.index, url: croppedImage, status: 'ready' as const }
+              ? { index: img.index, url: finalImageUrl, status: 'ready' as const }
               : img
           );
           return [...newImages];
@@ -276,20 +513,35 @@ export default function Home() {
     }
   };
 
-  const downloadAllExtracted = () => {
-    extractedImages.filter(img => img.status === 'ready').forEach(img => {
+  const downloadAllExtracted = async () => {
+    const readyImages = extractedImages.filter(img => img.status === 'ready');
+    for (const img of readyImages) {
+      await downloadSingleImage(img);
+      // Birden fazla indirme arasında küçük gecikme
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+  };
+
+  const downloadSingleImage = async (img: {index: number, url: string}) => {
+    // Eğer base64 ise direkt indir
+    if (img.url.startsWith('data:')) {
       const link = document.createElement("a");
       link.href = img.url;
       link.download = `upscaled_${img.index + 1}_${scale}x.png`;
+      document.body.appendChild(link);
       link.click();
-    });
-  };
-
-  const downloadSingleImage = (img: {index: number, url: string}) => {
+      document.body.removeChild(link);
+      return;
+    }
+    
+    // URL ise API route üzerinden indir (CORS bypass)
+    const downloadUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
     const link = document.createElement("a");
-    link.href = img.url;
+    link.href = downloadUrl;
     link.download = `upscaled_${img.index + 1}_${scale}x.png`;
+    document.body.appendChild(link);
     link.click();
+    document.body.removeChild(link);
   };
 
   // ============================================
@@ -306,12 +558,41 @@ export default function Home() {
     setError(null);
   };
 
-  const downloadGrid = () => {
+  const downloadGrid = async () => {
     if (!gridImage) return;
-    const link = document.createElement("a");
-    link.href = gridImage;
-    link.download = `grid_${topMode}_${Date.now()}.png`;
-    link.click();
+    
+    // Eğer base64 ise direkt indir
+    if (gridImage.startsWith('data:')) {
+      const link = document.createElement("a");
+      link.href = gridImage;
+      link.download = `grid_${topMode}_${Date.now()}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+    
+    // URL ise - server-side proxy ile indir
+    try {
+      const response = await fetch(`/api/download?url=${encodeURIComponent(gridImage)}`);
+      
+      if (!response.ok) {
+        throw new Error('Download failed');
+      }
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `grid_${topMode}_${Date.now()}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Download error:", error);
+      alert("Görsel indirilemedi. Lütfen grid üzerinde sağ tık yapıp 'Resmi farklı kaydet' seçeneğini kullanın.");
+    }
   };
 
   const fadeIn = mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4";
@@ -657,8 +938,8 @@ export default function Home() {
                     className={`relative group overflow-hidden ${isDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                     style={{
                       backgroundImage: `url(${gridImage})`,
-                      backgroundSize: "300% 300%",
-                      backgroundPosition: `${(i % 3) * 50}% ${Math.floor(i / 3) * 50}%`,
+                      backgroundSize: "330% 330%",
+                      backgroundPosition: `${(i % 3) * 48 + 2}% ${Math.floor(i / 3) * 48 + 2}%`,
                     }}
                   >
                     <div
