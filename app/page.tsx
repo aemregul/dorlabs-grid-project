@@ -312,20 +312,41 @@ export default function Home() {
   };
 
   const buildPrompt = () => {
+    const baseInstructions = `Generate a 3x3 grid with 9 COMPLETELY DIFFERENT panels. NO TEXT, NO LABELS.
+  CRITICAL: Each panel MUST be visually DISTINCT and UNIQUE - not similar copies.`;
+  
     switch (topMode) {
       case "angles":
-        return "Create a 3x3 grid showing 9 different cinematic camera angles of this exact scene: wide shot, medium shot, close-up, low angle, high angle, side view, over-the-shoulder, detail shot, and dramatic perspective.";
-      
+        return `${baseInstructions}
+  Transform this scene into 9 DRAMATICALLY DIFFERENT camera angles:
+  Panel 1: EXTREME WIDE - show entire room/environment
+  Panel 2: WIDE - full bodies visible
+  Panel 3: MEDIUM - waist up
+  Panel 4: CLOSE-UP - face only, intense emotion
+  Panel 5: EXTREME CLOSE-UP - eyes or hands only
+  Panel 6: LOW ANGLE - camera on ground looking up, powerful
+  Panel 7: HIGH ANGLE - bird's eye view looking down
+  Panel 8: DUTCH ANGLE - tilted 45 degrees, tension
+  Panel 9: OVER SHOULDER - from behind one character
+  Each panel must look COMPLETELY DIFFERENT from others. Vary composition dramatically.`;
+  
       case "thumbnail":
-        return "Create a 3x3 grid of 9 eye-catching thumbnail variations with different compositions, framing, and visual emphasis.";
-      
+        return `${baseInstructions}
+  Create 9 DRAMATICALLY DIFFERENT thumbnail crops:
+  Vary zoom level from extreme wide to extreme close.
+  Each panel must have UNIQUE framing and focal point.`;
+  
       case "storyboard":
-        return "Create a 3x3 grid showing a 9-panel cinematic storyboard progression of this scene.";
-      
+        return `${baseInstructions}
+  Create 9 sequential story moments - each panel shows DIFFERENT action/moment.
+  Time must progress between panels. Show movement and change.`;
+  
       default:
-        return "";
+        return baseInstructions;
     }
   };
+  
+  
 
   // ============================================
   // NANOBANANA API - GRID GENERATION
@@ -655,7 +676,7 @@ export default function Home() {
       {/* UPLOAD AREA */}
       <div className={`transition-all duration-700 delay-200 ${fadeIn}`}>
         <div
-          className={`relative w-[75vw] max-w-5xl h-[50vh] border-2 border-dashed rounded-2xl flex items-center justify-center overflow-hidden transition-all duration-300 ${
+          className={`relative w-[70vw] max-w-4xl aspect-video border-2 border-dashed rounded-2xl flex items-center justify-center overflow-hidden transition-all duration-300 ${
             loading
               ? "border-[#333] bg-[#111] cursor-default"
               : isDragging
@@ -669,6 +690,7 @@ export default function Home() {
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
         >
+        
           {!image && (
             <span className="text-white text-4xl font-bold tracking-wide">
               DROP IMAGE HERE
@@ -680,7 +702,7 @@ export default function Home() {
               <img
                 src={image}
                 alt="uploaded"
-                className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+                className="absolute inset-0 w-full h-full object-contain pointer-events-none"
               />
               
               {/* Loading overlay */}
