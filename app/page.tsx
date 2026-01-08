@@ -20,13 +20,14 @@ import {
 } from "lucide-react";
 
 // ============================================
-// NANOBANANA API CONFIGURATION
+// API CONFIGURATION
 // ============================================
 const NANOBANANA_API_URL = "https://api.nanobananaapi.ai/api/v1/nanobanana";
 const NANOBANANA_API_KEY = process.env.NEXT_PUBLIC_NANOBANANA_API_KEY || "";
 
 type ModeTop = "angles" | "thumbnail" | "storyboard";
 type Aspect = "16:9" | "9:16" | "1:1";
+type AIProvider = "nanobanana" | "fal";
 
 export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -47,12 +48,12 @@ export default function Home() {
   const [extractionProgress, setExtractionProgress] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [aiProvider, setAiProvider] = useState<AIProvider>("fal"); // Default to FAL.AI
 
   const [extractedImages, setExtractedImages] = useState<{ index: number, url: string, status: 'extracting' | 'ready' }[]>([]);
 
   useEffect(() => {
     setMounted(true);
-    console.log("NANOBANANA KEY:", process.env.NEXT_PUBLIC_NANOBANANA_API_KEY);
   }, []);
 
   // ============================================
@@ -131,7 +132,6 @@ export default function Home() {
 
   const generateWithNanobanana = async (imageDataUrl: string, promptText: string): Promise<string> => {
     console.log("=== NANOBANANA API CALL ===");
-    console.log("API Key exists:", !!NANOBANANA_API_KEY);
     
     let finalImageUrl = imageDataUrl;
     const isBase64 = imageDataUrl.startsWith('data:');
@@ -142,32 +142,8 @@ export default function Home() {
         finalImageUrl = await uploadToImgBB(imageDataUrl);
         setLoadingProgress(15);
       } catch (uploadError) {
-        console.error("Upload failed, using Text-to-Image mode");
-        const requestBody = {
-          prompt: promptText,
-          numImages: 1,
-          imageSize: aspect,
-          type: "TEXTTOIAMGE",
-        };
-        
-        const generateResponse = await fetch(`${NANOBANANA_API_URL}/generate`, {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${NANOBANANA_API_KEY}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(requestBody),
-        });
-        
-        const generateData = await generateResponse.json();
-        if (!generateResponse.ok || generateData.code !== 200) {
-          throw new Error(generateData.msg || "API Error");
-        }
-        
-        const taskId = generateData.data?.taskId;
-        if (!taskId) throw new Error("No taskId returned");
-        
-        return await pollTaskStatus(taskId);
+        console.error("Upload failed");
+        throw new Error("Image upload failed");
       }
     }
     
@@ -178,9 +154,6 @@ export default function Home() {
       type: "IMAGETOIAMGE",
       imageUrls: [finalImageUrl],
     };
-    
-    console.log("Using IMAGE-TO-IMAGE mode");
-    console.log("Request body:", { ...requestBody, imageUrls: ["[URL]"] });
 
     const generateResponse = await fetch(`${NANOBANANA_API_URL}/generate`, {
       method: "POST",
@@ -191,28 +164,22 @@ export default function Home() {
       body: JSON.stringify(requestBody),
     });
 
-    console.log("Response status:", generateResponse.status);
-    
     const generateData = await generateResponse.json();
-    console.log("Response data:", generateData);
 
     if (!generateResponse.ok || generateData.code !== 200) {
       throw new Error(generateData.msg || `API Error: ${generateResponse.status}`);
     }
 
     const taskId = generateData.data?.taskId;
-
     if (!taskId) {
       throw new Error("No taskId returned from API");
     }
 
-    console.log("Task ID:", taskId);
-
-    const resultUrl = await pollTaskStatus(taskId);
+    const resultUrl = await pollNanobananaStatus(taskId);
     return resultUrl;
   };
 
-  const pollTaskStatus = async (taskId: string): Promise<string> => {
+  const pollNanobananaStatus = async (taskId: string): Promise<string> => {
     const maxAttempts = 60;
     let attempts = 0;
 
@@ -243,14 +210,48 @@ export default function Home() {
 
       await new Promise(resolve => setTimeout(resolve, 2000));
       attempts++;
-      setLoadingProgress(Math.min((attempts / maxAttempts) * 100, 95));
+      setLoadingProgress(Math.min(20 + (attempts / maxAttempts) * 75, 95));
     }
 
     throw new Error("Generation timed out");
   };
 
   // ============================================
-  // PROMPT BUILDER
+  // FAL.AI API
+  // ============================================
+  const generateWithFalAI = async (imageDataUrl: string, promptText: string): Promise<string> => {
+    console.log("=== FAL.AI API CALL ===");
+    setLoadingProgress(10);
+
+    const response = await fetch('/api/fal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        image: imageDataUrl,
+        prompt: promptText,
+        aspect: aspect,
+      }),
+    });
+
+    setLoadingProgress(50);
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'FAL.AI generation failed');
+    }
+
+    const data = await response.json();
+    setLoadingProgress(95);
+
+    if (data.success && data.imageUrl) {
+      return data.imageUrl;
+    } else {
+      throw new Error("No image URL returned");
+    }
+  };
+
+  // ============================================
+  // PROMPT BUILDER (Fallback)
   // ============================================
   const buildPrompt = () => {
     const baseInstructions = `Generate a 3x3 grid with 9 COMPLETELY DIFFERENT panels. NO TEXT, NO LABELS.
@@ -273,9 +274,7 @@ Each panel must look COMPLETELY DIFFERENT from others. Vary composition dramatic
 
       case "thumbnail":
         return `${baseInstructions}
-Create 9 DRAMATICALLY DIFFERENT thumbnail crops:
-Vary zoom level from extreme wide to extreme close.
-Each panel must have UNIQUE framing and focal point.`;
+Create 9 DRAMATICALLY DIFFERENT thumbnail variations with clickbait style text overlays and graphics.`;
 
       case "storyboard":
         return `${baseInstructions}
@@ -288,7 +287,7 @@ Time must progress between panels. Show movement and change.`;
   };
 
   // ============================================
-  // GRID GENERATION WITH CLAUDE
+  // MAIN GRID GENERATION
   // ============================================
   const generateGrid = async () => {
     if (!image) return;
@@ -302,7 +301,7 @@ Time must progress between panels. Show movement and change.`;
     try {
       let gridPrompt = "";
 
-      // AUTO mode: Claude ile analiz et
+      // Claude ile analiz
       if (mode === "auto") {
         console.log("=== CLAUDE ANALYSIS ===");
         setLoadingProgress(5);
@@ -325,13 +324,11 @@ Time must progress between panels. Show movement and change.`;
           const analyzeData = await analyzeResponse.json();
           gridPrompt = analyzeData.prompt;
           console.log("Claude generated prompt:", gridPrompt);
-          setLoadingProgress(15);
         } catch (analyzeError) {
           console.error("Claude analysis failed, using fallback:", analyzeError);
           gridPrompt = buildPrompt();
         }
       } else {
-        // CUSTOM mode
         gridPrompt = buildPrompt();
         if (prompt) {
           gridPrompt += ` Additional style: ${prompt}`;
@@ -339,31 +336,28 @@ Time must progress between panels. Show movement and change.`;
       }
 
       console.log("=== GENERATE GRID ===");
-      console.log("Final Prompt:", gridPrompt);
+      console.log("AI Provider:", aiProvider);
+      console.log("Final Prompt:", gridPrompt.substring(0, 200) + "...");
 
-      if (NANOBANANA_API_KEY && NANOBANANA_API_KEY.length > 0) {
-        console.log("Using REAL API");
-        setLoadingProgress(20);
-        
-        const resultImageUrl = await generateWithNanobanana(image, gridPrompt);
-        setLoadingProgress(100);
-        
-        await new Promise(resolve => setTimeout(resolve, 300));
-        
-        setGridImage(resultImageUrl);
-        setGridGenerated(true);
+      let resultImageUrl: string;
+
+      if (aiProvider === "fal") {
+        // FAL.AI kullan
+        resultImageUrl = await generateWithFalAI(image, gridPrompt);
       } else {
-        console.log("Using DEMO MODE - No API key found");
-        for (let i = 0; i <= 100; i += Math.random() * 15 + 5) {
-          setLoadingProgress(Math.min(i, 99));
-          await new Promise((resolve) => setTimeout(resolve, 200));
+        // Nanobanana kullan
+        if (!NANOBANANA_API_KEY) {
+          throw new Error("Nanobanana API key not found");
         }
-        setLoadingProgress(100);
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        
-        setGridImage(image);
-        setGridGenerated(true);
+        resultImageUrl = await generateWithNanobanana(image, gridPrompt);
       }
+
+      setLoadingProgress(100);
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
+      setGridImage(resultImageUrl);
+      setGridGenerated(true);
+
     } catch (err) {
       console.error("Grid generation error:", err);
       setError(err instanceof Error ? err.message : "An error occurred");
@@ -458,16 +452,10 @@ Time must progress between panels. Show movement and change.`;
 
         let finalImageUrl = croppedImage;
 
-        if (NANOBANANA_API_KEY && scale > 1) {
-          try {
-            const upscalePrompt = `Upscale this image to ${scale}x resolution. Enhance details, maintain sharpness, and preserve the original style and colors. High quality ${scale === 4 ? '4K' : 'HD'} output.`;
-            finalImageUrl = await generateWithNanobanana(croppedImage, upscalePrompt);
-          } catch (upscaleError) {
-            console.error("Upscale failed, using original:", upscaleError);
-            finalImageUrl = croppedImage;
-          }
-        } else {
-          await new Promise((resolve) => setTimeout(resolve, 1500));
+        // Upscale işlemi (opsiyonel)
+        if (scale > 1) {
+          // Şimdilik sadece crop, upscale sonra eklenebilir
+          await new Promise((resolve) => setTimeout(resolve, 500));
         }
 
         setExtractedImages(prev => {
@@ -501,7 +489,7 @@ Time must progress between panels. Show movement and change.`;
     if (img.url.startsWith('data:')) {
       const link = document.createElement("a");
       link.href = img.url;
-      link.download = `upscaled_${img.index + 1}_${scale}x.png`;
+      link.download = `extracted_${img.index + 1}_${scale}x.png`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -511,7 +499,7 @@ Time must progress between panels. Show movement and change.`;
     const downloadUrl = `/api/download?url=${encodeURIComponent(img.url)}`;
     const link = document.createElement("a");
     link.href = downloadUrl;
-    link.download = `upscaled_${img.index + 1}_${scale}x.png`;
+    link.download = `extracted_${img.index + 1}_${scale}x.png`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -562,7 +550,7 @@ Time must progress between panels. Show movement and change.`;
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Download error:", error);
-      alert("Görsel indirilemedi. Lütfen grid üzerinde sağ tık yapıp 'Resmi farklı kaydet' seçeneğini kullanın.");
+      alert("Download failed. Please right-click the image and save manually.");
     }
   };
 
@@ -676,7 +664,7 @@ Time must progress between panels. Show movement and change.`;
                     </div>
                   </div>
                   <p className="text-white text-lg font-bold tracking-[0.2em]">
-                    PROCESSING IMAGE DATA
+                    {aiProvider === "fal" ? "FAL.AI PROCESSING..." : "NANOBANANA PROCESSING..."}
                   </p>
                 </div>
               )}
@@ -708,6 +696,7 @@ Time must progress between panels. Show movement and change.`;
       {image && (
         <div className={`flex flex-col items-center gap-5 transition-all duration-500 ${image ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"} ${loading ? "opacity-50 pointer-events-none" : ""}`}>
           <div className="flex items-center gap-6">
+            {/* Aspect Ratio */}
             <div className="flex flex-col items-center gap-2">
               <span className="text-[10px] tracking-[0.3em] text-gray-600 font-medium">
                 ASPECT RATIO
@@ -731,6 +720,7 @@ Time must progress between panels. Show movement and change.`;
 
             <div className="w-px h-12 bg-[#222]" />
 
+            {/* Prompt Mode */}
             <div className="flex flex-col items-center gap-2">
               <span className="text-[10px] tracking-[0.3em] text-gray-600 font-medium">
                 PROMPT MODE
@@ -760,8 +750,40 @@ Time must progress between panels. Show movement and change.`;
                 </button>
               </div>
             </div>
+
+            <div className="w-px h-12 bg-[#222]" />
+
+            {/* AI Provider */}
+            <div className="flex flex-col items-center gap-2">
+              <span className="text-[10px] tracking-[0.3em] text-gray-600 font-medium">
+                AI ENGINE
+              </span>
+              <div className="flex bg-[#111] border border-[#222] rounded-xl p-1 gap-1">
+                <button
+                  onClick={() => setAiProvider("fal")}
+                  className={`flex items-center gap-2 px-5 py-2 rounded-lg text-xs font-medium tracking-wider transition-all duration-200 ${
+                    aiProvider === "fal"
+                      ? "bg-purple-500 text-white"
+                      : "text-gray-500 hover:text-white hover:bg-white/5"
+                  }`}
+                >
+                  FAL.AI
+                </button>
+                <button
+                  onClick={() => setAiProvider("nanobanana")}
+                  className={`flex items-center gap-2 px-5 py-2 rounded-lg text-xs font-medium tracking-wider transition-all duration-200 ${
+                    aiProvider === "nanobanana"
+                      ? "bg-yellow-500 text-black"
+                      : "text-gray-500 hover:text-white hover:bg-white/5"
+                  }`}
+                >
+                  NANOBANANA
+                </button>
+              </div>
+            </div>
           </div>
 
+          {/* Custom Prompt */}
           {mode === "self" && (
             <div className="w-[500px]">
               <div className="relative">
@@ -778,6 +800,7 @@ Time must progress between panels. Show movement and change.`;
             </div>
           )}
 
+          {/* Generate Button */}
           <button
             onClick={generateGrid}
             disabled={loading}
@@ -802,7 +825,7 @@ Time must progress between panels. Show movement and change.`;
           {gridGenerated && (
             <p className="text-[10px] text-gray-600 tracking-[0.2em] flex items-center gap-2">
               <Clock size={12} />
-              PROCESSING TIME: ~3-4 MINUTES
+              PROCESSING TIME: ~1-2 MINUTES
             </p>
           )}
         </div>
@@ -865,8 +888,8 @@ Time must progress between panels. Show movement and change.`;
                 display: 'grid',
                 gridTemplateColumns: 'repeat(3, 1fr)',
                 gridTemplateRows: 'repeat(3, 1fr)',
-                aspectRatio: '21 / 10',
-                gap: '1px',
+                aspectRatio: '16 / 9',
+                gap: '2px',
                 backgroundColor: '#000'
               }}
             >
@@ -888,8 +911,8 @@ Time must progress between panels. Show movement and change.`;
                     className={`relative group overflow-hidden ${isDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                     style={{
                       backgroundImage: `url(${gridImage})`,
-                      backgroundSize: "330% 330%",
-                      backgroundPosition: `${(i % 3) * 48 + 2}% ${Math.floor(i / 3) * 48 + 2}%`,
+                      backgroundSize: "300% 300%",
+                      backgroundPosition: `${(i % 3) * 50}% ${Math.floor(i / 3) * 50}%`,
                     }}
                   >
                     <div
@@ -907,7 +930,7 @@ Time must progress between panels. Show movement and change.`;
                     {isExtracting && (
                       <div className="absolute top-2 left-2 flex items-center gap-1.5 bg-black/50 backdrop-blur-sm border border-yellow-500/50 px-3 py-1.5 rounded text-xs font-medium text-yellow-400 tracking-wide">
                         <RefreshCw size={12} className="animate-spin" />
-                        REGENERATING
+                        EXTRACTING
                       </div>
                     )}
 
@@ -979,22 +1002,15 @@ Time must progress between panels. Show movement and change.`;
 
           <button
             onClick={handleExtract}
-            disabled={loading}
+            disabled={extracting}
             className="group relative bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 px-14 py-4 rounded-xl text-black font-bold tracking-wider transition-all duration-300 hover:scale-105 hover:shadow-xl hover:shadow-emerald-500/30"
           >
             <span className="flex items-center gap-3">
               <Download size={20} />
-              UPSCALE {selected.length} IMAGE{selected.length > 1 ? "S" : ""}
+              EXTRACT {selected.length} IMAGE{selected.length > 1 ? "S" : ""}
               <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
             </span>
           </button>
-
-          <div className="flex items-center gap-4 text-[10px] text-gray-600 tracking-[0.15em]">
-            <span className="flex items-center gap-1.5">
-              <Clock size={12} />
-              ESTIMATED: ~{selected.length} MIN
-            </span>
-          </div>
         </div>
       )}
 
@@ -1010,7 +1026,7 @@ Time must progress between panels. Show movement and change.`;
 
           <div className="flex items-center gap-3">
             <h2 className="text-2xl font-bold tracking-wider text-emerald-400">
-              EXTRACTION QUEUE
+              EXTRACTED IMAGES
             </h2>
             <span className="text-gray-500 text-2xl">({extractedImages.length})</span>
           </div>
@@ -1027,16 +1043,16 @@ Time must progress between panels. Show movement and change.`;
                 className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 px-4 py-2.5 rounded-lg text-sm font-medium transition-all"
               >
                 <Download size={16} className="text-black" />
-                <span className="text-black tracking-wider">DOWNLOAD READY</span>
+                <span className="text-black tracking-wider">DOWNLOAD ALL</span>
               </button>
             )}
           </div>
 
-          <div className="w-[95vw] max-w-7xl grid grid-cols-3 gap-2">
+          <div className="w-[95vw] max-w-7xl grid grid-cols-3 gap-2" style={{ aspectRatio: '16 / 9' }}>
             {extractedImages.map((img) => (
               <div
                 key={img.index}
-                className="relative aspect-[21/10] bg-[#111] overflow-hidden group"
+                className="relative aspect-video bg-[#111] overflow-hidden group"
                 style={{
                   backgroundImage: img.status === 'ready' ? `url(${img.url})` : `url(${gridImage})`,
                   backgroundSize: img.status === 'ready' ? 'cover' : '300% 300%',
@@ -1054,34 +1070,9 @@ Time must progress between panels. Show movement and change.`;
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        setImage(img.url);
-                        setGridImage(null);
-                        setGridGenerated(false);
-                        setSelected([]);
-                        setExtractedImages([]);
-                      }}
-                      className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 px-3 py-2 rounded-lg text-black font-bold text-xs tracking-wide transition-all"
-                    >
-                      <Sparkles size={14} />
-                      UPLOAD AS INPUT
-                    </button>
-
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                      }}
-                      className="w-10 h-10 rounded-full bg-[#333] hover:bg-[#444] flex items-center justify-center transition-all group/btn relative"
-                      title="Retry upscale"
-                    >
-                      <RefreshCw size={16} className="text-white" />
-                    </button>
-
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
                         downloadSingleImage(img);
                       }}
-                      className="w-10 h-10 rounded-full bg-[#333] hover:bg-[#444] flex items-center justify-center transition-all group/btn relative"
+                      className="w-10 h-10 rounded-full bg-[#333] hover:bg-[#444] flex items-center justify-center transition-all"
                       title="Download image"
                     >
                       <Download size={16} className="text-white" />
@@ -1094,7 +1085,7 @@ Time must progress between panels. Show movement and change.`;
                     ? 'bg-emerald-500/20 text-emerald-400'
                     : 'bg-emerald-500 text-black'
                 }`}>
-                  {img.status === 'extracting' ? 'EXTRACTING ...' : `READY • ${scale}X`}
+                  {img.status === 'extracting' ? 'EXTRACTING...' : 'READY'}
                 </div>
               </div>
             ))}
@@ -1102,7 +1093,7 @@ Time must progress between panels. Show movement and change.`;
         </div>
       )}
 
-      {/* GO AGAIN & WARNING SECTION */}
+      {/* GO AGAIN */}
       {gridGenerated && (
         <div className="flex flex-col items-center gap-6 py-8">
           <button
@@ -1111,18 +1102,6 @@ Time must progress between panels. Show movement and change.`;
           >
             GO AGAIN
           </button>
-
-          <div className="flex flex-col items-center gap-3 max-w-2xl text-center">
-            <p className="text-yellow-500 font-bold text-lg tracking-widest">WARNING:</p>
-            <p className="text-gray-400 text-sm leading-relaxed">
-              CLICKING &quot;GO AGAIN&quot; WILL RESTART THE ENTIRE PROCESS. ANY EXTRACTED
-              IMAGES THAT HAVEN&apos;T BEEN DOWNLOADED WILL BE PERMANENTLY LOST
-              AND CANNOT BE RECOVERED.
-            </p>
-            <p className="text-gray-600 text-xs tracking-wide mt-1">
-              MAKE SURE TO DOWNLOAD ALL YOUR IMAGES BEFORE PROCEEDING.
-            </p>
-          </div>
         </div>
       )}
     </main>

@@ -13,25 +13,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Image required' }, { status: 400 });
     }
 
-    // Base64 formatını düzenle
     const base64Data = image.replace(/^data:image\/\w+;base64,/, '');
     const mediaType = image.match(/^data:(image\/\w+);base64,/)?.[1] || 'image/jpeg';
-
-    const modeDescriptions: Record<string, string> = {
-      angles: 'different cinematic camera angles (wide shot, medium shot, close-up, low angle, high angle, over-the-shoulder, dutch angle, bird eye view, etc.). Each panel shows the SAME moment from a different camera position.',
-      
-      thumbnail: `YouTube clickbait thumbnail designs. CRITICAL REQUIREMENTS:
-- Each panel must have BOLD, ATTENTION-GRABBING TEXT/TITLE overlay (like "SHOCKING!", "YOU WON'T BELIEVE THIS", "WAIT WHAT?!", "MUST SEE", "FINALLY!", etc.)
-- Use EXAGGERATED facial expressions (shocked, surprised, excited, curious, amazed)
-- Add GRAPHIC ELEMENTS like arrows pointing at something, circles highlighting areas, emoji-style reactions
-- Apply DIFFERENT COLOR GRADING to each panel (warm orange/yellow, cool blue, high contrast, vibrant saturated)
-- Create VISUAL DRAMA with dramatic lighting and shadows
-- Each thumbnail must look like a CLICKABLE YouTube video preview
-- Subject must be prominently visible with engaging expression
-- Use bold colors, high contrast, and eye-catching compositions`,
-      
-      storyboard: 'a sequential story progression showing different moments/actions in a narrative arc with clear beginning, middle, and end. Each panel shows a DIFFERENT moment in time, like frames from a movie.'
-    };
 
     const message = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
@@ -50,37 +33,7 @@ export async function POST(request: NextRequest) {
             },
             {
               type: 'text',
-              text: `Analyze this image and create a detailed prompt for generating a 3x3 grid (9 panels) showing ${modeDescriptions[mode] || modeDescriptions.angles}.
-
-CRITICAL REQUIREMENTS:
-1. Describe the scene, characters, lighting, color palette, and mood in DETAIL
-2. For each of the 9 panels, specify EXACTLY what should be shown - be very specific
-3. Each panel MUST be VISUALLY DISTINCT and UNIQUE from others
-4. Maintain consistency in the main subject/character across all panels
-5. Output aspect ratio: ${aspect}
-6. The main subject must be clearly visible and recognizable in ALL 9 panels
-
-${mode === 'thumbnail' ? `
-THUMBNAIL SPECIFIC REQUIREMENTS:
-- Panel 1: Shocked expression + "WOW" style text + warm colors
-- Panel 2: Curious look + question-based text + cool blue tones
-- Panel 3: Excited pose + exclamation text + high contrast
-- Panel 4: Pointing at something + arrow graphics + vibrant colors
-- Panel 5: Close-up surprised face + bold text overlay + dramatic lighting
-- Panel 6: Action pose + energetic text + saturated colors
-- Panel 7: Before/after style + comparison text + split tone
-- Panel 8: Discovery moment + reveal text + spotlight effect
-- Panel 9: Satisfied/accomplished look + success text + golden warm tones
-` : ''}
-
-Format your response as a single, detailed prompt that can be sent directly to an image generation AI. The prompt should:
-- Start with overall scene and style description
-- Include specific details for each panel (Panel 1, Panel 2, etc.)
-- End with style/quality instructions
-- Include "3x3 grid", "9 panels" in the prompt
-${mode === 'thumbnail' ? '- IMPORTANT: Include clickbait text overlays, exaggerated expressions, arrows, circles, and graphic elements for each thumbnail' : '- Include "NO TEXT", "NO LABELS" in the prompt'}
-
-Respond ONLY with the prompt, no explanations or preamble.`
+              text: getPromptForMode(mode, aspect)
             }
           ],
         }
@@ -93,5 +46,81 @@ Respond ONLY with the prompt, no explanations or preamble.`
   } catch (error) {
     console.error('Claude API error:', error);
     return NextResponse.json({ error: 'Analysis failed' }, { status: 500 });
+  }
+}
+
+function getPromptForMode(mode: string, aspect: string): string {
+  const baseInstruction = `Look at this image carefully. Describe the main subject in detail: their exact appearance, clothing, facial features, hair, and the setting.`;
+
+  switch (mode) {
+    case 'angles':
+      return `${baseInstruction}
+
+Create a prompt for a 3x3 grid showing 9 DIFFERENT CAMERA ANGLES of this EXACT scene and character.
+
+Requirements:
+- Keep the SAME person with IDENTICAL face and clothes in ALL panels
+- Each panel = different camera angle (wide, medium, close-up, low angle, high angle, etc.)
+- Photorealistic quality, cinematic lighting
+- ${aspect} aspect ratio
+
+Format your response as a single image generation prompt. Include:
+1. Detailed character description (face, hair, clothes, expression)
+2. Setting description
+3. "3x3 grid, 9 panels, different camera angles"
+4. "Same character in all panels, photorealistic, NO TEXT"
+
+Output ONLY the prompt, nothing else.`;
+
+    case 'thumbnail':
+      return `${baseInstruction}
+
+Create a prompt for a 3x3 grid of 9 YouTube clickbait thumbnails.
+
+Requirements:
+- Keep the character recognizable in all panels
+- Each panel has DIFFERENT color scheme (red, blue, yellow, green, purple, orange)
+- Add SHORT text overlays (1-2 words max): "WOW!", "NO WAY!", "WHAT?!", "OMG!", "EPIC!", "INSANE!", "FINALLY!", "SECRET!", "THE END!"
+- Add arrows, emojis, dramatic lighting
+- ${aspect} aspect ratio
+
+Format your response as a single image generation prompt. Include:
+1. Character description
+2. "3x3 grid, 9 YouTube thumbnail panels"
+3. Specific color and text for each panel
+4. "Clickbait style, dramatic expressions, bold text overlays"
+
+Output ONLY the prompt, nothing else.`;
+
+    case 'storyboard':
+      return `${baseInstruction}
+
+Create a prompt for a 3x3 grid showing 9 SEQUENTIAL STORY MOMENTS.
+
+Requirements:
+- Keep the SAME character with IDENTICAL appearance in ALL panels
+- Show a story progression: beginning → middle → end
+- Mix camera angles (wide establishing shots, medium shots, close-ups)
+- Each panel = different moment in time, NOT the same moment
+- Photorealistic, cinematic quality
+- ${aspect} aspect ratio
+
+Format your response as a single image generation prompt. Include:
+1. Detailed character description (must stay consistent)
+2. Setting description
+3. Brief description of what happens in each panel (Panel 1: ..., Panel 2: ..., etc.)
+4. "3x3 grid, 9 panels, sequential story, same character throughout"
+5. "Photorealistic, cinematic, NO TEXT, NO LABELS"
+
+Output ONLY the prompt, nothing else.`;
+
+    default:
+      return `${baseInstruction}
+
+Create a prompt for a 3x3 grid of 9 variations of this image.
+Keep the same character, vary the camera angles.
+${aspect} aspect ratio, photorealistic, NO TEXT.
+
+Output ONLY the prompt.`;
   }
 }
