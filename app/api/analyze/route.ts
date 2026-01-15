@@ -110,7 +110,6 @@ OUTPUT: Write a single detailed paragraph describing this exact person/subject. 
 }
 
 function buildFinalPrompt(characterDescription: string, mode: string): string {
-  // FLUX 2 Edit için optimize edilmiş prompt yapısı
 
   switch (mode) {
     case "angles":
@@ -142,18 +141,24 @@ GRID REQUIREMENTS:
 - Each panel edge-to-edge, flowing into the next
 - The SAME EXACT person in ALL 9 panels - identical face, identical features
 
-9 THUMBNAIL STYLES with subtle colored lighting:
-1. Warm ORANGE tint - SURPRISED expression, mouth open
-2. Cool BLUE light - EXCITED, wide eyes
-3. Golden YELLOW glow - AMAZED, looking up
-4. Soft TEAL accent - CURIOUS, raised eyebrow
-5. Purple RIM light - SHOCKED, hands near face
-6. Sunset WARM backlight - TRIUMPHANT, fist raised
-7. Cyan HIGHLIGHTS - WORRIED, looking aside
-8. Pink AMBIENT - HAPPY, genuine smile
-9. Dramatic BACKLIGHT - INTENSE, determined
+9 THUMBNAIL COMPOSITIONS (each COMPLETELY DIFFERENT camera angle and pose):
+1. WIDE ACTION SHOT - full body in dynamic motion, running or jumping
+2. MEDIUM SHOT - waist up, pointing directly at camera with urgency
+3. EXTREME CLOSE-UP - only eyes and forehead filling frame, intense stare
+4. SHOCKED REACTION - hands on cheeks, mouth wide open, surprised
+5. OVER-SHOULDER LOOK - turning back toward camera, mysterious glance
+6. LOW ANGLE HERO - camera below looking up, powerful dominant pose
+7. SIDE PROFILE - dramatic rim lighting, thoughtful or determined look
+8. CELEBRATION - fist pump or arms raised high, pure joy and excitement
+9. CURIOUS/CONFUSED - head tilted, one eyebrow raised, questioning expression
 
-CRITICAL: Keep original environment visible. Only add subtle color TINTS. Same person with different expressions. YouTube thumbnail energy, photorealistic.`;
+CRITICAL RULES:
+- Each panel MUST have DIFFERENT camera angle (wide/medium/close-up/extreme close-up)
+- Each panel MUST have DIFFERENT body pose and gesture
+- Each panel MUST have DIFFERENT facial expression
+- This is NOT about color filters - it's about VARIETY in composition
+- YouTube thumbnail energy: clickbait-worthy, dramatic, eye-catching
+- Photorealistic quality, professional lighting`;
 
     case "storyboard":
       return `Create a seamless 3x3 grid of 9 sequential storyboard panels showing: ${characterDescription}

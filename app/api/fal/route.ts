@@ -17,43 +17,49 @@ export async function POST(request: NextRequest) {
     console.log("Mode:", mode);
     console.log("Aspect:", aspect);
 
-    // Grid prompt oluştur
     const gridPrompt = buildGridPrompt(mode, prompt);
     console.log("Grid Prompt:", gridPrompt.substring(0, 200) + "...");
 
-    // FAL.AI base64 data URI'yi direkt kabul ediyor!
-    // image zaten "data:image/jpeg;base64,..." formatında
+    let resultImageUrl: string | null = null;
 
     // 1. Nano Banana Pro Edit dene
     try {
       console.log("Trying Nano Banana Pro Edit...");
-      const result = await generateWithNanoBananaPro(image, gridPrompt, aspect, FAL_KEY);
+      resultImageUrl = await generateWithNanoBananaPro(image, gridPrompt, aspect, FAL_KEY);
       console.log("Nano Banana Pro success!");
-      return NextResponse.json({ success: true, gridImage: result, panels: [] });
     } catch (nbError) {
       console.error("Nano Banana Pro failed:", nbError);
     }
 
     // 2. FLUX 2 Pro Edit dene
-    try {
-      console.log("Trying FLUX 2 Pro Edit...");
-      const result = await generateWithFlux2ProEdit(image, gridPrompt, FAL_KEY);
-      console.log("FLUX 2 Pro Edit success!");
-      return NextResponse.json({ success: true, gridImage: result, panels: [] });
-    } catch (flux2Error) {
-      console.error("FLUX 2 Pro Edit failed:", flux2Error);
+    if (!resultImageUrl) {
+      try {
+        console.log("Trying FLUX 2 Pro Edit...");
+        resultImageUrl = await generateWithFlux2ProEdit(image, gridPrompt, FAL_KEY);
+        console.log("FLUX 2 Pro Edit success!");
+      } catch (flux2Error) {
+        console.error("FLUX 2 Pro Edit failed:", flux2Error);
+      }
     }
 
     // 3. FLUX 1 dev image-to-image (fallback)
-    try {
-      console.log("Trying FLUX 1 dev image-to-image...");
-      const result = await generateWithFlux1Dev(image, gridPrompt, aspect, FAL_KEY);
-      console.log("FLUX 1 dev success!");
-      return NextResponse.json({ success: true, gridImage: result, panels: [] });
-    } catch (flux1Error) {
-      console.error("FLUX 1 dev failed:", flux1Error);
-      throw flux1Error;
+    if (!resultImageUrl) {
+      try {
+        console.log("Trying FLUX 1 dev image-to-image...");
+        resultImageUrl = await generateWithFlux1Dev(image, gridPrompt, aspect, FAL_KEY);
+        console.log("FLUX 1 dev success!");
+      } catch (flux1Error) {
+        console.error("FLUX 1 dev failed:", flux1Error);
+        throw flux1Error;
+      }
     }
+
+    // 4. POST-PROCESSING: Grid'i piksel-perfect yap
+    console.log("=== POST-PROCESSING: Fixing grid alignment ===");
+    const fixedGridImage = await fixGridAlignment(resultImageUrl);
+    console.log("Grid alignment fixed!");
+
+    return NextResponse.json({ success: true, gridImage: fixedGridImage, panels: [] });
 
   } catch (error) {
     console.error('Generation error:', error);
@@ -63,13 +69,98 @@ export async function POST(request: NextRequest) {
   }
 }
 
-// Nano Banana Pro Edit - Google Gemini 3 Pro tabanlı
+// ============================================
+// POST-PROCESSING: Grid Alignment Fix
+// ============================================
+async function fixGridAlignment(imageUrl: string): Promise<string> {
+  const sharp = (await import('sharp')).default;
+
+  // Görseli fetch et
+  let imageBuffer: Buffer;
+
+  if (imageUrl.startsWith('data:')) {
+    const base64Data = imageUrl.replace(/^data:image\/\w+;base64,/, '');
+    imageBuffer = Buffer.from(base64Data, 'base64');
+  } else {
+    const response = await fetch(imageUrl);
+    const arrayBuffer = await response.arrayBuffer();
+    imageBuffer = Buffer.from(arrayBuffer);
+  }
+
+  // Orijinal boyutları al
+  const metadata = await sharp(imageBuffer).metadata();
+  const width = metadata.width || 1920;
+  const height = metadata.height || 1080;
+
+  // Her hücrenin boyutu (tam bölünebilir)
+  const cellWidth = Math.floor(width / 3);
+  const cellHeight = Math.floor(height / 3);
+
+  // Yeni grid boyutu (3'e tam bölünebilir)
+  const newWidth = cellWidth * 3;
+  const newHeight = cellHeight * 3;
+
+  // Görseli yeniden boyutlandır (3'e tam bölünebilir olması için)
+  const resizedBuffer = await sharp(imageBuffer)
+    .resize(newWidth, newHeight, { fit: 'fill' })
+    .toBuffer();
+
+  // 9 hücreyi crop et
+  const cells: Buffer[] = [];
+
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 3; col++) {
+      const cell = await sharp(resizedBuffer)
+        .extract({
+          left: col * cellWidth,
+          top: row * cellHeight,
+          width: cellWidth,
+          height: cellHeight
+        })
+        .toBuffer();
+      cells.push(cell);
+    }
+  }
+
+  // Hücreleri piksel-perfect birleştir
+  const compositeOperations = cells.map((cell, index) => {
+    const col = index % 3;
+    const row = Math.floor(index / 3);
+    return {
+      input: cell,
+      left: col * cellWidth,
+      top: row * cellHeight
+    };
+  });
+
+  // Boş canvas oluştur ve hücreleri yerleştir
+  const finalBuffer = await sharp({
+    create: {
+      width: newWidth,
+      height: newHeight,
+      channels: 3,
+      background: { r: 0, g: 0, b: 0 }
+    }
+  })
+    .composite(compositeOperations)
+    .png()
+    .toBuffer();
+
+  // Base64'e çevir
+  const resultBase64 = `data:image/png;base64,${finalBuffer.toString('base64')}`;
+
+  return resultBase64;
+}
+
+// ============================================
+// FAL.AI GENERATORS
+// ============================================
 async function generateWithNanoBananaPro(imageData: string, prompt: string, aspect: string, apiKey: string): Promise<string> {
   const aspectRatio = aspect === "16:9" ? "16:9" : aspect === "9:16" ? "9:16" : "1:1";
 
   const requestBody = {
     prompt: prompt,
-    image_urls: [imageData],  // FAL base64 data URI kabul ediyor
+    image_urls: [imageData],
     num_images: 1,
     aspect_ratio: aspectRatio,
     output_format: "png",
@@ -103,7 +194,6 @@ async function generateWithNanoBananaPro(imageData: string, prompt: string, aspe
   throw new Error("No images in response");
 }
 
-// FLUX 2 Pro Edit
 async function generateWithFlux2ProEdit(imageData: string, prompt: string, apiKey: string): Promise<string> {
   const requestBody = {
     prompt: prompt,
@@ -137,7 +227,6 @@ async function generateWithFlux2ProEdit(imageData: string, prompt: string, apiKe
   throw new Error("No images in response");
 }
 
-// FLUX 1 dev image-to-image (en güvenilir fallback)
 async function generateWithFlux1Dev(imageData: string, prompt: string, aspect: string, apiKey: string): Promise<string> {
   const imageSize = aspect === "16:9"
     ? { width: 1920, height: 1080 }
@@ -147,7 +236,7 @@ async function generateWithFlux1Dev(imageData: string, prompt: string, aspect: s
 
   const requestBody = {
     prompt: prompt,
-    image_url: imageData,  // FLUX 1 tek URL alıyor (array değil)
+    image_url: imageData,
     strength: 0.75,
     num_inference_steps: 28,
     guidance_scale: 3.5,
@@ -209,27 +298,6 @@ CRITICAL REQUIREMENTS:
 9. Profile view - side of face, rim lighting
 
 Style: Cinematic, photorealistic, 8K quality, consistent lighting.`;
-
-    case "thumbnail":
-      return `Create a professional 3x3 grid of 9 YouTube thumbnail variations showing ${basePrompt}.
-
-CRITICAL REQUIREMENTS:
-- NO borders, NO gaps between panels
-- All 9 panels show the EXACT SAME person
-- Keep original background visible, only add color TINTS
-
-9 THUMBNAIL STYLES:
-1. Warm ORANGE tint - SURPRISED expression
-2. Cool BLUE light - EXCITED, wide eyes
-3. Golden YELLOW glow - AMAZED, looking up
-4. Soft TEAL accent - CURIOUS, raised eyebrow
-5. Purple RIM light - SHOCKED
-6. Sunset WARM backlight - TRIUMPHANT
-7. Cyan HIGHLIGHTS - WORRIED
-8. Pink AMBIENT - HAPPY, smile
-9. Dramatic BACKLIGHT - INTENSE
-
-Style: YouTube thumbnail quality, dramatic, photorealistic.`;
 
     case "storyboard":
       return `Create a professional 3x3 storyboard grid of 9 sequential panels showing ${basePrompt}.

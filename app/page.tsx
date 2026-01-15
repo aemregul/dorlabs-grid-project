@@ -19,7 +19,7 @@ import {
   Clock,
 } from "lucide-react";
 
-type ModeTop = "angles" | "thumbnail" | "storyboard";
+type ModeTop = "angles" | "storyboard";
 type Aspect = "16:9" | "9:16" | "1:1";
 
 export default function Home() {
@@ -204,11 +204,6 @@ Create 9 different camera angles of the same subject:
 Wide shot, medium shot, close-up, extreme close-up, low angle, high angle, dutch angle, profile, three-quarter view.
 Cinematic, photorealistic, professional photography.`;
 
-      case "thumbnail":
-        return `${baseInstructions}
-Create 9 YouTube thumbnail style variations with different expressions and colored lighting.
-Dramatic, clickbait energy, professional quality.`;
-
       case "storyboard":
         return `${baseInstructions}
 Create 9 sequential story moments showing action progression.
@@ -259,6 +254,8 @@ Cinematic storyboard quality, consistent character.`;
           gridPrompt = analyzeData.prompt;
           console.log("Claude prompt:", gridPrompt.substring(0, 200) + "...");
           setLoadingProgress(8);
+
+
         } catch (analyzeError) {
           console.error("Claude analysis failed, using fallback:", analyzeError);
           gridPrompt = buildPrompt();
@@ -270,7 +267,9 @@ Cinematic storyboard quality, consistent character.`;
         }
       }
 
+      // Grid üret
       const resultImageUrl = await generateWithFalAI(image, gridPrompt);
+
 
       setLoadingProgress(100);
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -487,7 +486,6 @@ Cinematic storyboard quality, consistent character.`;
         <div className="flex bg-[#111] border border-[#222] rounded-2xl p-1.5 gap-1">
           {[
             { key: "angles", label: "ANGLES", icon: Film },
-            { key: "thumbnail", label: "THUMBNAIL", icon: ImageIcon },
             { key: "storyboard", label: "STORYBOARD", icon: Grid3x3 },
           ].map((item) => {
             const active = topMode === item.key;
