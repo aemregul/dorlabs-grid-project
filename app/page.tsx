@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import {
   Sparkles,
   PenLine,
@@ -24,6 +25,7 @@ type Aspect = "16:9" | "9:16" | "1:1";
 
 export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
 
   const [image, setImage] = useState<string | null>(null);
   const [gridImage, setGridImage] = useState<string | null>(null);
@@ -41,12 +43,35 @@ export default function Home() {
   const [extracting, setExtracting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [authChecked, setAuthChecked] = useState(false);
 
   const [extractedImages, setExtractedImages] = useState<{ index: number; url: string; status: "extracting" | "ready" }[]>([]);
 
   useEffect(() => {
-    setMounted(true);
-  }, []);
+    // Auth kontrolü
+    const checkAuth = () => {
+      const cookies = document.cookie.split(';');
+      const authCookie = cookies.find(c => c.trim().startsWith('site-auth='));
+
+      if (!authCookie || !authCookie.includes('authenticated')) {
+        router.push('/auth');
+        return;
+      }
+      setAuthChecked(true);
+      setMounted(true);
+    };
+
+    checkAuth();
+  }, [router]);
+
+  // Auth kontrolü tamamlanmadan hiçbir şey gösterme
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center">
+        <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
+      </div>
+    );
+  }
 
   // ============================================
   // FILE HANDLING
