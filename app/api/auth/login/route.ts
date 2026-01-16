@@ -15,7 +15,7 @@ export async function POST(request: NextRequest) {
         if (password === correctPassword) {
             const response = NextResponse.json({ success: true });
 
-            // Cookie set et (30 gün geçerli)
+            // Cookie set et (100 yıl geçerli)
             response.cookies.set('site-auth', 'authenticated', {
                 httpOnly: true,
                 secure: process.env.NODE_ENV === 'production',
