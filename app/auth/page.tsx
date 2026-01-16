@@ -1,14 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Lock, ArrowRight, AlertTriangle } from "lucide-react";
 
 export default function AuthPage() {
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
-    const router = useRouter();
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -23,8 +21,7 @@ export default function AuthPage() {
             });
 
             if (res.ok) {
-                router.push("/");
-                router.refresh();
+                window.location.href = "/";
             } else {
                 setError("Incorrect password");
             }
